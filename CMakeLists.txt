@@ -1,12 +1,12 @@
-# This usage of CMake requires at least version 2.4 (checks are made to determine what to use when certain versions lack functions)
+﻿# This usage of CMake requires at least version 2.4 (checks are made to determine what to use when certain versions lack functions)
 cmake_minimum_required(VERSION 2.4 FATAL_ERROR)
 if(COMMAND cmake_policy)
   cmake_policy(SET CMP0003 NEW)
   if(POLICY CMP0026)
-    cmake_policy(SET CMP0026 OLD)
+	cmake_policy(SET CMP0026 OLD)
   endif(POLICY CMP0026)
   if(POLICY CMP0007)
-    cmake_policy(SET CMP0007 OLD)
+	cmake_policy(SET CMP0007 OLD)
   endif(POLICY CMP0007)
 endif(COMMAND cmake_policy)
 
@@ -24,16 +24,16 @@ if(HAS_PATCH)
 else(HAS_PATCH)
   string(REGEX MATCH "\\." HAS_DOT "${ONLY_VERSION}")
   if(HAS_DOT)
-    string(REGEX REPLACE "(.*)\\..*" "\\1" MINOR_VERSION "${ONLY_VERSION}")
-    string(REGEX REPLACE ".*\\.(.*)" "\\1" PATCH_VERSION "${ONLY_VERSION}")
+	string(REGEX REPLACE "(.*)\\..*" "\\1" MINOR_VERSION "${ONLY_VERSION}")
+	string(REGEX REPLACE ".*\\.(.*)" "\\1" PATCH_VERSION "${ONLY_VERSION}")
   else(HAS_DOT)
-    string(REGEX REPLACE "(.*)-beta" "\\1" MINOR_VERSION "${ONLY_VERSION}")
-    if(MINOR_VERSION STREQUAL "4-1\n")
-      set(PATCH_VERSION 1)
-    else(MINOR_VERSION STREQUAL "4-1\n")
-      set(PATCH_VERSION 0)
-    endif(MINOR_VERSION STREQUAL "4-1\n")
-    set(MINOR_VERSION 4)
+	string(REGEX REPLACE "(.*)-beta" "\\1" MINOR_VERSION "${ONLY_VERSION}")
+	if(MINOR_VERSION STREQUAL "4-1\n")
+	  set(PATCH_VERSION 1)
+	else(MINOR_VERSION STREQUAL "4-1\n")
+	  set(PATCH_VERSION 0)
+	endif(MINOR_VERSION STREQUAL "4-1\n")
+	set(MINOR_VERSION 4)
   endif(HAS_DOT)
 endif(HAS_PATCH)
 
@@ -47,24 +47,24 @@ else(MINOR_VERSION GREATER 5)
   set(CMAKE26_OR_BETTER FALSE)
   # Also detect if we are using CMake 2.4.8 or better, the FIND sub-command of list() is nonexistent in earlier versions
   if(PATCH_VERSION GREATER 7)
-    set(CMAKE248_OR_BETTER TRUE)
-    set(CMAKE244_OR_BETTER TRUE)
-    set(CMAKE242_OR_BETTER TRUE)
+	set(CMAKE248_OR_BETTER TRUE)
+	set(CMAKE244_OR_BETTER TRUE)
+	set(CMAKE242_OR_BETTER TRUE)
   else(PATCH_VERSION GREATER 7)
-    set(CMAKE248_OR_BETTER FALSE)
-    # Also detect if we are using CMake 2.4.4 or better, the CheckCXXCompilerFlag module and SORT sub-command of list() are nonexistent in earlier versions
-    if(PATCH_VERSION GREATER 3)
-      set(CMAKE244_OR_BETTER TRUE)
-      set(CMAKE242_OR_BETTER TRUE)
-    else(PATCH_VERSION GREATER 3)
-      set(CMAKE244_OR_BETTER FALSE)
-      # ALSO detect if we are using CMake 2.4.2 or better, the APPEND sub-command of list() is nonexistent in earlier versions
-      if(PATCH_VERSION GREATER 1)
-        set(CMAKE242_OR_BETTER TRUE)
-      else(PATCH_VERSION GREATER 1)
-        set(CMAKE242_OR_BETTER FALSE)
-      endif(PATCH_VERSION GREATER 1)
-    endif(PATCH_VERSION GREATER 3)
+	set(CMAKE248_OR_BETTER FALSE)
+	# Also detect if we are using CMake 2.4.4 or better, the CheckCXXCompilerFlag module and SORT sub-command of list() are nonexistent in earlier versions
+	if(PATCH_VERSION GREATER 3)
+	  set(CMAKE244_OR_BETTER TRUE)
+	  set(CMAKE242_OR_BETTER TRUE)
+	else(PATCH_VERSION GREATER 3)
+	  set(CMAKE244_OR_BETTER FALSE)
+	  # ALSO detect if we are using CMake 2.4.2 or better, the APPEND sub-command of list() is nonexistent in earlier versions
+	  if(PATCH_VERSION GREATER 1)
+		set(CMAKE242_OR_BETTER TRUE)
+	  else(PATCH_VERSION GREATER 1)
+		set(CMAKE242_OR_BETTER FALSE)
+	  endif(PATCH_VERSION GREATER 1)
+	endif(PATCH_VERSION GREATER 3)
   endif(PATCH_VERSION GREATER 7)
 endif(MINOR_VERSION GREATER 5)
 
@@ -85,10 +85,11 @@ if(CMAKE_COMPILER_IS_GNUCXX)
   execute_process(COMMAND ${CMAKE_CXX_COMPILER} -dumpversion OUTPUT_VARIABLE GCC_FULL_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE)
   string(REGEX REPLACE "^(\\d+\\.\\d+)" "\\1" GCC_VERSION ${GCC_FULL_VERSION})
   if(GCC_VERSION LESS 4.2)
-    message(FATAL_ERROR "Your compiler is too old to build Anope. Upgrade to GCC 4.2 or newer!")
+	message(FATAL_ERROR "Your compiler is too old to build Anope. Upgrade to GCC 4.2 or newer!")
   endif(GCC_VERSION LESS 4.2)
   if(GCC_VERSION GREATER 6.0 OR GCC_VERSION EQUAL 6.0)
-    set(CXXFLAGS "${CXXFLAGS} -fno-delete-null-pointer-checks")
+	#set(CXXFLAGS "${CXXFLAGS} -fno-delete-null-pointer-checks")
+	set(CXXFLAGS "${CXXFLAGS} -std=c++14 -fno-delete-null-pointer-checks")
   endif(GCC_VERSION GREATER 6.0 OR GCC_VERSION EQUAL 6.0)
 endif(CMAKE_COMPILER_IS_GNUCXX)
 
@@ -100,23 +101,23 @@ if(CMAKE_COMPILER_IS_GNUCXX OR "${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang$")
   string(REGEX REPLACE ".*\nlibraries: (.*)$" "\\1" LINE "${LINES}")
   # Replace the colons in the list with semicolons (only when not on MinGW, which uses semicolons already), and if on MinGW, just copy the line
   if(NOT MINGW)
-    string(REGEX REPLACE ":" ";" LIBRARIES ${LINE})
+	string(REGEX REPLACE ":" ";" LIBRARIES ${LINE})
   else(NOT MINGW)
-    set(LIBRARIES "${LINE}")
+	set(LIBRARIES "${LINE}")
   endif(NOT MINGW)
   # Iterate through the libraries
   foreach(LIBRARY ${LIBRARIES})
-    # Check if the first character is an equal sign, and skip that library directory as it is (I believe) the primary default and shows up later in the list anyways
-    string(SUBSTRING ${LIBRARY} 0 1 FIRST_CHAR)
-    if(NOT FIRST_CHAR STREQUAL "=")
-      # If the directory had no = in front of it, make sure it's absolute and add it to the list of default library directories
-      get_filename_component(LIBRARY ${LIBRARY} ABSOLUTE)
-      append_to_list(DEFAULT_LIBRARY_DIRS ${LIBRARY})
-    endif(NOT FIRST_CHAR STREQUAL "=")
+	# Check if the first character is an equal sign, and skip that library directory as it is (I believe) the primary default and shows up later in the list anyways
+	string(SUBSTRING ${LIBRARY} 0 1 FIRST_CHAR)
+	if(NOT FIRST_CHAR STREQUAL "=")
+	  # If the directory had no = in front of it, make sure it's absolute and add it to the list of default library directories
+	  get_filename_component(LIBRARY ${LIBRARY} ABSOLUTE)
+	  append_to_list(DEFAULT_LIBRARY_DIRS ${LIBRARY})
+	endif(NOT FIRST_CHAR STREQUAL "=")
   endforeach(LIBRARY)
   # Remove duplicate entries from the list
   if(DEFAULT_LIBRARY_DIRS)
-    remove_list_duplicates(DEFAULT_LIBRARY_DIRS)
+	remove_list_duplicates(DEFAULT_LIBRARY_DIRS)
   endif(DEFAULT_LIBRARY_DIRS)
   # Create a temporary file to test for the default include directories
   FILE(WRITE empty.cpp "")
@@ -131,33 +132,33 @@ if(CMAKE_COMPILER_IS_GNUCXX OR "${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang$")
   set(IN_SEARCH_LIST FALSE)
   # Iterate through the lines
   foreach(LINE ${LINES})
-    # If the line has the following on it, the next lines will contain directory names
-    if(LINE STREQUAL "#include <...> search starts here:")
-      set(IN_SEARCH TRUE)
-    else(LINE STREQUAL "#include <...> search starts here:")
-      # If the line has the following on it, we hit the end of the list
-      if(LINE STREQUAL "End of search list.")
-        set(IN_SEARCH FALSE)
-      else(LINE STREQUAL "End of search list.")
-        # If we are within the block between the above two lines...
-        if(IN_SEARCH)
-          # Get everything but the first character of the line
-          string(LENGTH ${LINE} LINE_LENGTH)
-          math(EXPR LINE_LENGTH "${LINE_LENGTH} - 1")
-          string(SUBSTRING ${LINE} 1 ${LINE_LENGTH} INCLUDE)
-          # For systems like Mac OS X, look for include paths that say " (framework directory)" at the end of them and strip that off
-          string(REGEX REPLACE " \\(framework directory\\)$" "" INCLUDE ${INCLUDE})
-          # Convert the path to an absolute one, just in case it wasn't
-          get_filename_component(INCLUDE ${INCLUDE} ABSOLUTE)
-          # Add that directory to the list of default include directories
-          append_to_list(DEFAULT_INCLUDE_DIRS ${INCLUDE})
-        endif(IN_SEARCH)
-      endif(LINE STREQUAL "End of search list.")
-    endif(LINE STREQUAL "#include <...> search starts here:")
+	# If the line has the following on it, the next lines will contain directory names
+	if(LINE STREQUAL "#include <...> search starts here:")
+	  set(IN_SEARCH TRUE)
+	else(LINE STREQUAL "#include <...> search starts here:")
+	  # If the line has the following on it, we hit the end of the list
+	  if(LINE STREQUAL "End of search list.")
+		set(IN_SEARCH FALSE)
+	  else(LINE STREQUAL "End of search list.")
+		# If we are within the block between the above two lines...
+		if(IN_SEARCH)
+		  # Get everything but the first character of the line
+		  string(LENGTH ${LINE} LINE_LENGTH)
+		  math(EXPR LINE_LENGTH "${LINE_LENGTH} - 1")
+		  string(SUBSTRING ${LINE} 1 ${LINE_LENGTH} INCLUDE)
+		  # For systems like Mac OS X, look for include paths that say " (framework directory)" at the end of them and strip that off
+		  string(REGEX REPLACE " \\(framework directory\\)$" "" INCLUDE ${INCLUDE})
+		  # Convert the path to an absolute one, just in case it wasn't
+		  get_filename_component(INCLUDE ${INCLUDE} ABSOLUTE)
+		  # Add that directory to the list of default include directories
+		  append_to_list(DEFAULT_INCLUDE_DIRS ${INCLUDE})
+		endif(IN_SEARCH)
+	  endif(LINE STREQUAL "End of search list.")
+	endif(LINE STREQUAL "#include <...> search starts here:")
   endforeach(LINE)
   # Remove duplicate entries from the list
   if(DEFAULT_INCLUDE_DIRS)
-    remove_list_duplicates(DEFAULT_INCLUDE_DIRS)
+	remove_list_duplicates(DEFAULT_INCLUDE_DIRS)
   endif(DEFAULT_INCLUDE_DIRS)
 endif(CMAKE_COMPILER_IS_GNUCXX OR "${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang$")
 
@@ -167,28 +168,28 @@ if(MSVC)
   # Look for the 2008 SDK under HKLM first
   get_filename_component(WSDK2008_PATH "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Microsoft SDKs\\Windows;CurrentInstallFolder]" ABSOLUTE CACHE)
   if(WSDK2008_PATH STREQUAL "/registry")
-    # If not found, look for the 2003 SDK under HKLM
-    get_filename_component(WSDK2003_PATH "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\MicrosoftSDK\\InstalledSDKs\\D2FF9F89-8AA2-4373-8A31-C838BF4DBBE1;Install Dir]" ABSOLUTE CACHE)
-    if(WSDK2003_PATH STREQUAL "/registry")
-      # If not found, look for the 2008 SDK under HKCU
-      get_filename_component(WSDK2008_PATH "[HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Microsoft SDKs\\Windows;CurrentInstallFolder]" ABSOLUTE CACHE)
-      if(WSDK2008_PATH STREQUAL "/registry")
-        # If not found, look for the 2003 SDK under HKCU
-        get_filename_component(WSDK2003_PATH "[HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\MicrosoftSDK\\InstalledSDKs\\D2FF9F89-8AA2-4373-8A31-C838BF4DBBE1;Install Dir]" ABSOLUTE CACHE)
-        if(WSDK2003_PATH STREQUAL "/registry")
-          # The SDK was never found, set the path to nothing
-          set(WSDK_PATH "")
-        else(WSDK2003_PATH STREQUAL "/registry")
-          set(WSDK_PATH "${WSDK2003_PATH}")
-        endif(WSDK2003_PATH STREQUAL "/registry")
-      else(WSDK2008_PATH STREQUAL "/registry")
-        set(WSDK_PATH "${WSDK2008_PATH}")
-      endif(WSDK2008_PATH STREQUAL "/registry")
-    else(WSDK2003_PATH STREQUAL "/registry")
-      set(WSDK_PATH "${WSDK2003_PATH}")
-    endif(WSDK2003_PATH STREQUAL "/registry")
+	# If not found, look for the 2003 SDK under HKLM
+	get_filename_component(WSDK2003_PATH "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\MicrosoftSDK\\InstalledSDKs\\D2FF9F89-8AA2-4373-8A31-C838BF4DBBE1;Install Dir]" ABSOLUTE CACHE)
+	if(WSDK2003_PATH STREQUAL "/registry")
+	  # If not found, look for the 2008 SDK under HKCU
+	  get_filename_component(WSDK2008_PATH "[HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Microsoft SDKs\\Windows;CurrentInstallFolder]" ABSOLUTE CACHE)
+	  if(WSDK2008_PATH STREQUAL "/registry")
+		# If not found, look for the 2003 SDK under HKCU
+		get_filename_component(WSDK2003_PATH "[HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\MicrosoftSDK\\InstalledSDKs\\D2FF9F89-8AA2-4373-8A31-C838BF4DBBE1;Install Dir]" ABSOLUTE CACHE)
+		if(WSDK2003_PATH STREQUAL "/registry")
+		  # The SDK was never found, set the path to nothing
+		  set(WSDK_PATH "")
+		else(WSDK2003_PATH STREQUAL "/registry")
+		  set(WSDK_PATH "${WSDK2003_PATH}")
+		endif(WSDK2003_PATH STREQUAL "/registry")
+	  else(WSDK2008_PATH STREQUAL "/registry")
+		set(WSDK_PATH "${WSDK2008_PATH}")
+	  endif(WSDK2008_PATH STREQUAL "/registry")
+	else(WSDK2003_PATH STREQUAL "/registry")
+	  set(WSDK_PATH "${WSDK2003_PATH}")
+	endif(WSDK2003_PATH STREQUAL "/registry")
   else(WSDK2008_PATH STREQUAL "/registry")
-    set(WSDK_PATH "${WSDK2008_PATH}")
+	set(WSDK_PATH "${WSDK2008_PATH}")
   endif(WSDK2008_PATH STREQUAL "/registry")
 endif(MSVC)
 
@@ -198,9 +199,9 @@ endif(MSVC)
 # Only do this if not using Visual Studio
 if(NOT MSVC)
   if(CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE ${CMAKE_BUILD_TYPE} CACHE STRING "Choose the type of build, options are: None(CMAKE_CXX_FLAGS or CMAKE_C_FLAGS used) Debug Release RelWithDebInfo MinSizeRel.")
+	set(CMAKE_BUILD_TYPE ${CMAKE_BUILD_TYPE} CACHE STRING "Choose the type of build, options are: None(CMAKE_CXX_FLAGS or CMAKE_C_FLAGS used) Debug Release RelWithDebInfo MinSizeRel.")
   else(CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE DEBUG CACHE STRING "Choose the type of build, options are: None(CMAKE_CXX_FLAGS or CMAKE_C_FLAGS used) Debug Release RelWithDebInfo MinSizeRel.")
+	set(CMAKE_BUILD_TYPE DEBUG CACHE STRING "Choose the type of build, options are: None(CMAKE_CXX_FLAGS or CMAKE_C_FLAGS used) Debug Release RelWithDebInfo MinSizeRel.")
   endif(CMAKE_BUILD_TYPE)
 endif(NOT MSVC)
 
@@ -269,16 +270,17 @@ else(MSVC)
   set(CXXFLAGS "${CXXFLAGS} -Wall -Wshadow")
   # If on a *nix system, also set the compile flags to remove GNU extensions (favor ISO C++) as well as reject non-ISO C++ code, also remove all leading underscores in exported symbols (only on GNU compiler)
   if(UNIX)
-    set(CXXFLAGS "${CXXFLAGS} -ansi -pedantic ${CMAKE_CXX_FLAGS}")
-    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-      set(CXXFLAGS "${CXXFLAGS} -Wno-long-long -fno-leading-underscore")
-    endif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+	#set(CXXFLAGS "${CXXFLAGS} -ansi -pedantic ${CMAKE_CXX_FLAGS}")
+	set(CXXFLAGS "${CXXFLAGS} -pedantic ${CMAKE_CXX_FLAGS}")
+	if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+	  set(CXXFLAGS "${CXXFLAGS} -Wno-long-long -fno-leading-underscore")
+	endif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   # If we aren't on a *nix system, we are using MinGW
   else(UNIX)
-    # Also, if we are building under MinGW, add another define for MinGW
-    if(MINGW)
-      add_definitions(-DMINGW)
-    endif(MINGW)
+	# Also, if we are building under MinGW, add another define for MinGW
+	if(MINGW)
+	  add_definitions(-DMINGW)
+	endif(MINGW)
   endif(UNIX)
 endif(MSVC)
 
@@ -295,10 +297,10 @@ endif(MINGW)
 if(NOT PROGRAM_NAME)
   # Under Windows, we set the executable name for Anope to be anope
   if(WIN32)
-    set(PROGRAM_NAME anope)
+	set(PROGRAM_NAME anope)
   # Under *nix, we set the executable name for Anope to be services
   else(WIN32)
-    set(PROGRAM_NAME services)
+	set(PROGRAM_NAME services)
   endif(WIN32)
 endif(NOT PROGRAM_NAME)
 
@@ -306,47 +308,47 @@ endif(NOT PROGRAM_NAME)
 if(NOT MSVC)
   # Check if the C++ compiler can accept the -pipe flag, and add it to the compile flags if it works
   if(CMAKE244_OR_BETTER)
-    # If using CMake 2.4.4 or better, we can use check_cxx_compiler_flag
-    check_cxx_compiler_flag(-pipe HAVE_PIPE_FLAG)
+	# If using CMake 2.4.4 or better, we can use check_cxx_compiler_flag
+	check_cxx_compiler_flag(-pipe HAVE_PIPE_FLAG)
   else(CMAKE244_OR_BETTER)
-    # If using CMake 2.4.3 or older, we will use check_cxx_accepts_flags instead
-    check_cxx_accepts_flag(-pipe HAVE_PIPE_FLAG)
+	# If using CMake 2.4.3 or older, we will use check_cxx_accepts_flags instead
+	check_cxx_accepts_flag(-pipe HAVE_PIPE_FLAG)
   endif(CMAKE244_OR_BETTER)
   # If the flag was accepted, add it to the list of flags
   if(HAVE_PIPE_FLAG)
-    set(CXXFLAGS "${CXXFLAGS} -pipe")
+	set(CXXFLAGS "${CXXFLAGS} -pipe")
   endif(HAVE_PIPE_FLAG)
 
   # The following are additional library checks, they are not required for Windows
   if(NOT WIN32)
-    # Check if socket is within the socket library (if the library exists), and add it to the linker flags if needed
-    check_library_exists(socket socket "" HAVE_SOCKET_LIB)
-    if(HAVE_SOCKET_LIB)
-      append_to_list(LINK_LIBS socket)
-    endif(HAVE_SOCKET_LIB)
-    # Check if inet_addr is within the nsl library (if the library exists), and add it to the linker flags if needed
-    check_library_exists(nsl inet_addr "" HAVE_NSL_LIB)
-    if(HAVE_NSL_LIB)
-      append_to_list(LINK_LIBS nsl)
-    endif(HAVE_NSL_LIB)
-    # Check if pthread_create is within the pthread library (if the library exists), and add it to the linker flags if needed
-    check_library_exists(pthread pthread_create "" HAVE_PTHREAD)
-    if(HAVE_PTHREAD)
-      if(NOT APPLE)
-        set(LDFLAGS "${LDFLAGS} -pthread")
-      endif(NOT APPLE)
-    else(HAVE_PTHREAD)
-      message(FATAL_ERROR "The pthread library is required to build Anope")
-    endif(HAVE_PTHREAD)
+	# Check if socket is within the socket library (if the library exists), and add it to the linker flags if needed
+	check_library_exists(socket socket "" HAVE_SOCKET_LIB)
+	if(HAVE_SOCKET_LIB)
+	  append_to_list(LINK_LIBS socket)
+	endif(HAVE_SOCKET_LIB)
+	# Check if inet_addr is within the nsl library (if the library exists), and add it to the linker flags if needed
+	check_library_exists(nsl inet_addr "" HAVE_NSL_LIB)
+	if(HAVE_NSL_LIB)
+	  append_to_list(LINK_LIBS nsl)
+	endif(HAVE_NSL_LIB)
+	# Check if pthread_create is within the pthread library (if the library exists), and add it to the linker flags if needed
+	check_library_exists(pthread pthread_create "" HAVE_PTHREAD)
+	if(HAVE_PTHREAD)
+	  if(NOT APPLE)
+		set(LDFLAGS "${LDFLAGS} -pthread")
+	  endif(NOT APPLE)
+	else(HAVE_PTHREAD)
+	  message(FATAL_ERROR "The pthread library is required to build Anope")
+	endif(HAVE_PTHREAD)
   endif(NOT WIN32)
 endif(NOT MSVC)
 
 # If DEFUMASK wasn't passed to CMake, set a default depending on if RUNGROUP was passed in or not
 if(NOT DEFUMASK)
   if(RUNGROUP)
-    set(DEFUMASK "007")
+	set(DEFUMASK "007")
   else(RUNGROUP)
-    set(DEFUMASK "077")
+	set(DEFUMASK "077")
   endif(RUNGROUP)
 endif(NOT DEFUMASK)
 
@@ -423,8 +425,8 @@ foreach(VERSION_STR ${VERSIONS})
   list(LENGTH VERSION_OUT VERSION_LEN)
   list(GET VERSION_OUT 0 VERSION_TYPE)
   if(${VERSION_LEN} GREATER 1)
-    list(GET VERSION_OUT 1 VERSION_DATA)
-    set(VERSION_${VERSION_TYPE} ${VERSION_DATA})
+	list(GET VERSION_OUT 1 VERSION_DATA)
+	set(VERSION_${VERSION_TYPE} ${VERSION_DATA})
   endif(${VERSION_LEN} GREATER 1)
 endforeach(VERSION_STR ${VERSIONS})
 
@@ -436,14 +438,14 @@ if(EXISTS "${Anope_SOURCE_DIR}/include/version.h")
   # Attempt to read the build number from include/version.h
   read_from_file(${Anope_SOURCE_DIR}/include/version.h "^#define VERSION_BUILD" VERSIONS)
   foreach(VERSION_STR ${VERSIONS})
-    # Get the length of the string
-    string(LENGTH ${VERSION_STR} VERSION_LEN)
-    # Subtract 22 from the string's length
-    math(EXPR VERSION_NUM_LEN "${VERSION_LEN} - 22")
-    # Extract the value from the string
-    string(SUBSTRING ${VERSION_STR} 22 ${VERSION_NUM_LEN} VERSION)
-    # Set VERSION_BUILD correctly
-    set(VERSION_BUILD ${VERSION})
+	# Get the length of the string
+	string(LENGTH ${VERSION_STR} VERSION_LEN)
+	# Subtract 22 from the string's length
+	math(EXPR VERSION_NUM_LEN "${VERSION_LEN} - 22")
+	# Extract the value from the string
+	string(SUBSTRING ${VERSION_STR} 22 ${VERSION_NUM_LEN} VERSION)
+	# Set VERSION_BUILD correctly
+	set(VERSION_BUILD ${VERSION})
   endforeach(VERSION_STR ${VERSIONS})
 endif(EXISTS "${Anope_SOURCE_DIR}/include/version.h")
 
@@ -472,7 +474,7 @@ if(${Anope_SOURCE_DIR} STREQUAL ${Anope_BINARY_DIR})
   add_to_cpack_ignored_files(".\\\\\\\\.so$;CPack.;anope-${VERSION_FULL_NOBUILD}-source\\\\\\\\..")
   # If using Visual Studio, add these files as well
   if(MSVC)
-    add_to_cpack_ignored_files(".vcproj$\;.sln$\;.ncb$\;.suo$\;.dir$\;.ilk$\;.exp$\;.pdb$\;.lib$\;/debug$;/release$;/relwithdebinfo$;/minsizerel$" TRUE)
+	add_to_cpack_ignored_files(".vcproj$\;.sln$\;.ncb$\;.suo$\;.dir$\;.ilk$\;.exp$\;.pdb$\;.lib$\;/debug$;/release$;/relwithdebinfo$;/minsizerel$" TRUE)
   endif(MSVC)
 endif(${Anope_SOURCE_DIR} STREQUAL ${Anope_BINARY_DIR})
 
@@ -503,7 +505,7 @@ endif(NOT WIN32 AND RUNGROUP)
 # On Windows platforms, install extra files
 if(WIN32)
   install(FILES ${Anope_SOURCE_DIR}/src/win32/anope.bat
-    DESTINATION ${BIN_DIR}
+	DESTINATION ${BIN_DIR}
   )
 
   # Package any DLLs in src/win/
@@ -527,29 +529,29 @@ if(EXISTS "${CMAKE_ROOT}/Modules/CPack.cmake")
   #set(CPACK_RESOURCE_FILE_README "${Anope_SOURCE_DIR}/docs/README")
   # The following is primarily for NSIS
   if(WIN32)
-    # By default, do not warn when built on machines using only VS Express:
-    IF(NOT DEFINED CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_NO_WARNINGS)
-      SET(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_NO_WARNINGS ON)
-    ENDIF(NOT DEFINED CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_NO_WARNINGS)
-    # Also for Windows, include installing the MSVCRT library
-    include(InstallRequiredSystemLibraries)
-    set(CPACK_GENERATOR "NSIS")
-    set(CPACK_PACKAGE_INSTALL_DIRECTORY "Anope")
-    set(CPACK_PACKAGE_EXECUTABLES "")
-    set(CPACK_NSIS_MENU_LINKS
-      "bin\\\\${SERVICES_BINARY}" "Anope IRC Services"
-      "bin\\\\anope.bat\\\" \\\"-debug -nofork" "Anope IRC Services (Debug and Window Logging)"
-      "bin\\\\anope.bat\\\" \\\"-nofork" "Anope IRC Services (Window Logging)"
-      "bin\\\\anope.bat\\\" \\\"-nothird" "Anope IRC Services (No Third Party Modules)"
-      "https://www.anope.org/" "Anope Web Site"
-    )
-    # The following doesn't work, but a bug report has been filed about it
-    #set(CPACK_CREATE_DESKTOP_LINK_${SERVICES_BINARY} TRUE)
-    set(CPACK_NSIS_MUI_ICON "${Anope_SOURCE_DIR}/src\\\\win32\\\\anope-icon.ico")
-    set(CPACK_NSIS_MUI_UNIICON "${Anope_SOURCE_DIR}/src\\\\win32\\\\anope-icon.ico")
-    set(CPACK_NSIS_INSTALLED_ICON_NAME "${SERVICES_BINARY}")
-    set(CPACK_NSIS_URL_INFO_ABOUT "https://www.anope.org/")
-    set(CPACK_NSIS_COMPRESSOR "/SOLID lzma")
+	# By default, do not warn when built on machines using only VS Express:
+	IF(NOT DEFINED CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_NO_WARNINGS)
+	  SET(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_NO_WARNINGS ON)
+	ENDIF(NOT DEFINED CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_NO_WARNINGS)
+	# Also for Windows, include installing the MSVCRT library
+	include(InstallRequiredSystemLibraries)
+	set(CPACK_GENERATOR "NSIS")
+	set(CPACK_PACKAGE_INSTALL_DIRECTORY "Anope")
+	set(CPACK_PACKAGE_EXECUTABLES "")
+	set(CPACK_NSIS_MENU_LINKS
+	  "bin\\\\${SERVICES_BINARY}" "Anope IRC Services"
+	  "bin\\\\anope.bat\\\" \\\"-debug -nofork" "Anope IRC Services (Debug and Window Logging)"
+	  "bin\\\\anope.bat\\\" \\\"-nofork" "Anope IRC Services (Window Logging)"
+	  "bin\\\\anope.bat\\\" \\\"-nothird" "Anope IRC Services (No Third Party Modules)"
+	  "https://www.anope.org/" "Anope Web Site"
+	)
+	# The following doesn't work, but a bug report has been filed about it
+	#set(CPACK_CREATE_DESKTOP_LINK_${SERVICES_BINARY} TRUE)
+	set(CPACK_NSIS_MUI_ICON "${Anope_SOURCE_DIR}/src\\\\win32\\\\anope-icon.ico")
+	set(CPACK_NSIS_MUI_UNIICON "${Anope_SOURCE_DIR}/src\\\\win32\\\\anope-icon.ico")
+	set(CPACK_NSIS_INSTALLED_ICON_NAME "${SERVICES_BINARY}")
+	set(CPACK_NSIS_URL_INFO_ABOUT "https://www.anope.org/")
+	set(CPACK_NSIS_COMPRESSOR "/SOLID lzma")
   endif(WIN32)
   set(CPACK_SOURCE_PACKAGE_FILE_NAME "anope-${VERSION_FULL_NOBUILD}-source")
   set(CPACK_SOURCE_GENERATOR "TGZ")
