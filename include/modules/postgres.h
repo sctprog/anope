@@ -327,7 +327,7 @@ private:
 	/**
 	 * @brief List of all connections to any postgres server
 	 */
-	std::map<Anope::string, PG::Service *> activeConnections;
+	std::map<Anope::string, PG::Service*> activeConnections;
 
 public:
 	/**
@@ -344,11 +344,6 @@ public:
 	 * @brief The thread used to execute queries
 	 */
 	Dispatcher *dispatcher;
-
-	/**
-	 * @brief Other objects in the postgres module need to be able to find the thread manager
-	 */
-	static ModuleHandler *moduleObject;
 
 	/**
 	 * @brief Constructor
@@ -381,6 +376,13 @@ public:
 	*/
 	void OnNotify() override;
 }; // PG::ModuleHandler class
+
+/**
+ * @brief Other objects in the postgres module need to be able to find the thread manager
+ * I tried to put this in the ModuleHandler class but was having linking errors.
+ * Either it can't be done or, more likely, I just don't know how.
+ */
+static PG::ModuleHandler *ModuleObject;
 
 } // PG namespace
 

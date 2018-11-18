@@ -106,7 +106,7 @@ PG::ModuleHandler::ModuleHandler(const Anope::string &modname, const Anope::stri
 	: Module(modname, creator, EXTRA | VENDOR)
 {
 	// Make it known where we are
-	moduleObject = this;
+	PG::ModuleObject = this;
 
 	dispatcher = new Dispatcher();
 	dispatcher->Start();
@@ -125,6 +125,8 @@ PG::ModuleHandler::~ModuleHandler()
 	dispatcher->Wakeup();
 	dispatcher->Join();
 	delete dispatcher;
+
+	PG::ModuleObject = nullptr;
 }
 
 // Handle reload of services configuration or initial startup
@@ -276,7 +278,8 @@ PG::Service::Service(
 // Destructor
 PG::Service::~Service()
 {
-	ModuleHandler *modObj = ModuleHandler::moduleObject;
+	// Find the module handler
+	ModuleHandler *modObj = PG::ModuleObject;
 
 	modObj->dispatcher->Lock();
 	Lock.Lock();
@@ -304,10 +307,13 @@ PG::Service::~Service()
 // Enqueue a query for execution
 void PG::Service::Run(SQL::Interface *iface, const SQL::Query &query)
 {
-	ModuleHandler::moduleObject->dispatcher->Lock();
-	ModuleHandler::moduleObject->QueryRequests.push_back(PG::QueryRequest(this, iface, query));
-	ModuleHandler::moduleObject->dispatcher->Unlock();
-	ModuleHandler::moduleObject->dispatcher->Wakeup();
+	// Find the module handler
+	PG::ModuleHandler *modObj = PG::ModuleObject;
+
+	modObj->dispatcher->Lock();
+	modObj->QueryRequests.push_back(PG::QueryRequest(this, iface, query));
+	modObj->dispatcher->Unlock();
+	modObj->dispatcher->Wakeup();
 }
 
 // Send a query to the database, return it's results
@@ -568,7 +574,7 @@ Anope::string PG::Service::FromUnixtime(time_t time)
  */
 void PG::Dispatcher::Run()
 {
-	ModuleHandler *modObj = ModuleHandler::moduleObject;
+	ModuleHandler *modObj = PG::ModuleObject;
 
 	if (modObj == nullptr)
 	{
