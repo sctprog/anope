@@ -1,4 +1,4 @@
-/*
+﻿/*
  *
  * (C) 2003-2018 Anope Team
  * Contact us at team@anope.org
@@ -6,13 +6,16 @@
  * Please read COPYING and README for further details.
  */
 
+#ifndef MODULES_SQL_H_
+#define MODULES_SQL_H_
+
 namespace SQL
 {
 
 	class Data : public Serialize::Data
 	{
 	 public:
- 		typedef std::map<Anope::string, std::stringstream *> Map;
+		typedef std::map<Anope::string, std::stringstream *> Map;
 		Map data;
 		std::map<Anope::string, Type> types;
 
@@ -142,7 +145,7 @@ namespace SQL
 		Anope::string error;
 	 public:
 		unsigned int id;
- 		Anope::string finished_query;
+		Anope::string finished_query;
 
 		Result() : id(0) { }
 		Result(unsigned int i, const Query &q, const Anope::string &fq, const Anope::string &err = "") : query(q), error(err), id(i), finished_query(fq) { }
@@ -214,3 +217,5 @@ namespace SQL
 	};
 
 }
+
+#endif // MODULES_SQL_H_
