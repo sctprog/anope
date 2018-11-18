@@ -1,4 +1,4 @@
-/*
+﻿/*
  * PostgreSQL wrapper
  *
  * Intended for use with m_sql_authentication, not tested for any other use case.
@@ -16,568 +16,602 @@
 
 /* RequiredLibraries: pq */
 
-#include <libpq-fe.h>
 #include <string>
+#include <sstream>
 
-#include "module.h"
+#include "modules/postgres.h"
 #include "modules/sql.h"
 
-class PgSQLService;
+// Constructor
+PG::QueryRequest::QueryRequest(Service *handler, SQL::Interface *iface, const SQL::Query &quer)
+{
+	sqlHandler = handler;
+	sqlInterface = iface;
+	query = quer;
+}
 
-/** A query request
+// Constructor
+// See header file for reasoning behind 2 result classes
+PG::QueryResult::QueryResult(SQL::Interface *iface, SQL::Result &res)
+{
+	sqlInterface = iface;
+	result = res;
+}
+
+// Constructor
+PG::Result::Result(
+		unsigned int insId,
+		const SQL::Query &queryStr,
+		const Anope::string &finalQuery,
+		PGresult *resObj)
+	: SQL::Result(insId, queryStr, finalQuery)
+{
+	libpqResultObj = resObj;
+
+	if (libpqResultObj == nullptr)
+		return;
+
+	// Look for the position of the word 'INSERT'
+	bool isInsert = query.query.find("INSERT", 0) == 0;
+
+	int num_fields = PQnfields(libpqResultObj);
+	int num_rows = PQntuples(libpqResultObj);
+
+	// Go through each row of the results and build a table of the result set
+	for (int row = 0; row < num_rows; row++)
+	{
+		std::map<Anope::string, Anope::string> items;
+
+		// each column
+		for (int col = 0; col < num_fields; col++)
+		{
+			Anope::string column = PQfname(libpqResultObj, col);
+			Anope::string data = PQgetvalue(libpqResultObj, row, col);
+
+			items[column] = data;
+
+			// If an insert, we've appended to the query to get the id of the row we just added
+			// Grab it now.
+			if (isInsert && column == "id")
+				id = convertTo<unsigned int>(data.str());
+		}
+
+		entries.push_back(items);
+	}
+}
+
+PG::Result::Result(
+		const SQL::Query &queryStr,
+		const Anope::string &finalQuery,
+		const Anope::string &err)
+	: SQL::Result(0, queryStr, finalQuery, err)
+{
+	libpqResultObj = nullptr;
+}
+
+// Destructor
+PG::Result::~Result()
+{
+	if (libpqResultObj != nullptr)
+	{
+		// Prevent memory leaks.
+		PQclear(libpqResultObj);
+
+		libpqResultObj = nullptr;
+	}
+}
+
+// Constructor
+PG::ModuleHandler::ModuleHandler(const Anope::string &modname, const Anope::string &creator)
+	: Module(modname, creator, EXTRA | VENDOR)
+{
+	// Make it known where we are
+	moduleObject = this;
+
+	dispatcher = new Dispatcher();
+	dispatcher->Start();
+}
+
+// Destructor
+PG::ModuleHandler::~ModuleHandler()
+{
+	// Memory clean up
+	for (auto &mod :activeConnections)
+		delete mod.second;
+	activeConnections.clear();
+
+	//Thread clean up
+	dispatcher->SetExitState();
+	dispatcher->Wakeup();
+	dispatcher->Join();
+	delete dispatcher;
+}
+
+// Handle reload of services configuration or initial startup
+void PG::ModuleHandler::OnReload(Configuration::Conf *conf)
+{
+	Configuration::Block *config = conf->GetModule(this);
+
+	// Remove any existing services in the event this isn't initial startup
+	for (auto &iter : activeConnections)
+	{
+		const Anope::string &cname = iter.first;
+		PG::Service *service = iter.second;
+		int i;
+
+		// Search for the main config block for this service
+		for (i = 0; i < config->CountBlock("pgsql"); ++i)
+			if (config->GetBlock("pgsql", i)->Get<const Anope::string>("name", "pgsql/main") == cname)
+				break;
+
+		// Delete the object associated with it
+		if (i == config->CountBlock("pgsql"))
+		{
+			Log(LOG_NORMAL, "PgSQL") << "m_pgsql: Removing server connection " << cname;
+
+			delete service;
+			activeConnections.erase(cname);
+		}
+	}
+
+	// Find the definition block for our module
+	for (int i = 0; i < config->CountBlock("pgsql"); ++i)
+	{
+		Configuration::Block *block = config->GetBlock("pgsql", i);
+		const Anope::string &connname = block->Get<const Anope::string>("name", "pgsql/main");
+
+		if (activeConnections.find(connname) == activeConnections.end())
+		{
+			// Populate the SQLd connection data
+			const Anope::string &database = block->Get<const Anope::string>("database", "anope");
+			const Anope::string &server = block->Get<const Anope::string>("server", "127.0.0.1");
+			const Anope::string &user = block->Get<const Anope::string>("username", "anope");
+			const Anope::string &password = block->Get<const Anope::string>("password");
+			int port = block->Get<int>("port", "5432");
+
+			// Attempt the connection
+			try
+			{
+				Log(LOG_NORMAL, "PgSQL") << "m_pgsql: Instantiating " << connname << " (" << server << ")";
+				PG::Service *service = new PG::Service(this, connname, database, server, user, password, port);
+
+				// Inform the service manager that we are up
+				activeConnections.insert(std::make_pair(connname, service));
+			}
+
+			catch (const SQL::Exception &ex)
+			{
+				// Likely the connection failed
+				Log(LOG_NORMAL, "PgSQL") << "m_pgsql: " << ex.GetReason();
+			}
+		}
+	}
+}
+
+// Handle module unloading and services shut down
+void PG::ModuleHandler::OnModuleUnload(User *, Module *module)
+{
+	dispatcher->Lock();
+
+	// Wipe all remaining query requests from the pool
+	// We need to work backwards because we're modifying the container that's being iterated.
+	for (unsigned i = QueryRequests.size(); i > 0; --i)
+	{
+		PG::QueryRequest &request = QueryRequests[i - 1];
+
+		if (request.sqlInterface && request.sqlInterface->owner == module)
+		{
+			if (i == 1)
+			{
+				// I don't know why this is here. Maybe to make sure competing locks have been released???
+				// I don't really want to mess with it just in case
+				request.sqlHandler->Lock.Lock();
+				request.sqlHandler->Lock.Unlock();
+			}
+
+			QueryRequests.erase(QueryRequests.begin() + i - 1);
+		}
+	}
+
+	dispatcher->Unlock();
+
+	/*
+	 * Handle any remaining finished SQL requests
+	 *
+	 * This serves two purposes:
+	 *  1) We can process any remaining information that needs to be
+	 *  2) More importantly, any allocated memory from libpq will be managed
+	 */
+	OnNotify();
+}
+
+// One or more queries have finished executing
+void PG::ModuleHandler::OnNotify()
+{
+	// Do a copy of the finished requests right now so we don't hold up the dispatcher
+	dispatcher->Lock();
+	std::deque<PG::QueryResult> finishedRequests = FinishedRequests;
+	FinishedRequests.clear();
+	dispatcher->Unlock();
+
+	// Iterate over the finished requests
+	for (auto &result :finishedRequests)
+	{
+		if (result.sqlInterface == nullptr)
+			throw SQL::Exception("sqlInterface is null in ModulePgSQL::OnNotify()");
+
+		if (result.result.GetError().empty())
+			result.sqlInterface->OnResult(result.result);
+
+		else
+			result.sqlInterface->OnError(result.result);
+	}
+}
+
+/*
+ * Constructor
+ * Initialize some variables!
  */
-struct QueryRequest
+PG::Service::Service(
+		Module *modObj,
+		const Anope::string &serviceName,
+		const Anope::string &db,
+		const Anope::string &hostname,
+		const Anope::string &username,
+		const Anope::string &passwd,
+		int portNo)
+	: Provider(modObj, serviceName)
 {
-    /* The connection to the database */
-    PgSQLService *service;
+	database = db;
+	server = hostname;
+	user = username;
+	password = passwd;
+	port = portNo;
 
-    /* The interface to use once we have the result to send the data back */
-    SQL::Interface *sqlinterface;
+	sqlConnection = nullptr;
 
-    /* The actual query */
-    SQL::Query query;
+	Connect();
+}
 
-    QueryRequest(PgSQLService *s, SQL::Interface *i, const SQL::Query &q) : service(s), sqlinterface(i), query(q) { }
-};
-
-/** A query result */
-struct QueryResult
+// Destructor
+PG::Service::~Service()
 {
-    /* The interface to send the data back on */
-    SQL::Interface *sqlinterface;
+	ModuleHandler *modObj = ModuleHandler::moduleObject;
 
-    /* The result */
-    SQL::Result result;
+	modObj->dispatcher->Lock();
+	Lock.Lock();
 
-    QueryResult(SQL::Interface *i, SQL::Result &r) : sqlinterface(i), result(r) { }
-};
+	// Close the Postgres connection
+	PQfinish(sqlConnection);
+	sqlConnection = nullptr;
 
-/** A PgSQL result
+	// Wipe remaining requests
+	for (auto i = modObj->QueryRequests.size(); i > 0; --i)
+	{
+		PG::QueryRequest &request = modObj->QueryRequests[i - 1];
+
+		if (request.sqlHandler == this)
+		{
+			if (request.sqlInterface)
+				request.sqlInterface->OnError(SQL::Result(0, request.query, "SQL Interface is going away"));
+			modObj->QueryRequests.erase(modObj->QueryRequests.begin() + i - 1);
+		}
+	}
+	Lock.Unlock();
+	modObj->dispatcher->Unlock();
+}
+
+// Enqueue a query for execution
+void PG::Service::Run(SQL::Interface *iface, const SQL::Query &query)
+{
+	ModuleHandler::moduleObject->dispatcher->Lock();
+	ModuleHandler::moduleObject->QueryRequests.push_back(PG::QueryRequest(this, iface, query));
+	ModuleHandler::moduleObject->dispatcher->Unlock();
+	ModuleHandler::moduleObject->dispatcher->Wakeup();
+}
+
+// Send a query to the database, return it's results
+SQL::Result PG::Service::RunQuery(const SQL::Query &query)
+{
+	Lock.Lock();
+
+	Anope::string real_query = BuildQuery(query);
+
+	if (CheckConnection())
+	{
+		PGresult *res = PQexec(sqlConnection, real_query.c_str());
+
+		if (PQresultStatus(res) == PGRES_TUPLES_OK // We got results back with our query
+			|| PQresultStatus(res) == PGRES_COMMAND_OK) // We got no results back with our query
+		{
+			Lock.Unlock();
+			return PG::Result(0, query, real_query, res);
+		}
+
+		Log(LOG_DEBUG) << "m_pgsql: Query failure. Message returned was: " << PQerrorMessage(sqlConnection);
+		Log(LOG_DEBUG) << "m_pgsql: Query was: " << query.query;
+		PQclear(res);
+	}
+
+	Anope::string error = PQerrorMessage(sqlConnection);
+	Lock.Unlock();
+	return PG::Result(query, real_query, error);
+}
+
+// Ensure the DB side table is on par, insert or alter as necessary
+std::vector<SQL::Query> PG::Service::CreateTable(const Anope::string &table, const SQL::Data &data)
+{
+	std::vector<SQL::Query> queries;
+	std::set<Anope::string> &known_cols = active_schema[table];
+
+	// Let's see if the schema is in the database already.
+	if (known_cols.empty())
+	{
+		Log(LOG_DEBUG) << "m_pgsql: Fetching columns for " << table;
+
+		SQL::Result columns = RunQuery("SHOW COLUMNS FROM `" + table + "`");
+		for (int i = 0; i < columns.Rows(); ++i)
+		{
+			const Anope::string &column = columns.Get(i, "Field");
+
+			Log(LOG_DEBUG) << "m_pgsql: Column #" << i << " for " << table << ": " << column;
+			known_cols.insert(column);
+		}
+	}
+
+	// If the table isn't in the database at all, add it in
+	if (known_cols.empty())
+	{
+		// Start with the basics
+		Anope::string query_text =
+			"CREATE TABLE '" + table
+			+ "'('id' int(10) unsigned NOT NULL AUTO_INCREMENT,"
+			+ " 'timestamp' timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP";
+
+		// Add then the rest ..
+		for (auto &it : data.data)
+		{
+			known_cols.insert(it.first);
+
+			query_text += ", '" + it.first + "' ";
+
+			if (data.GetType(it.first) == Serialize::Data::DT_INT)
+				query_text += "int(11)";
+			else
+				query_text += "text";
+		}
+
+		query_text += ", PRIMARY KEY ('id'), KEY 'timestamp_idx' ('timestamp'))";
+		queries.push_back(query_text);
+	}
+
+	// Ensure the existing table in SQL isn't missing any columns
+	else
+	{
+		for (auto &it :data.data)
+		{
+			if (known_cols.count(it.first) > 0)
+				continue;
+
+			known_cols.insert(it.first);
+
+			// Add it in
+			Anope::string query_text = "ALTER TABLE '" + table + "' ADD '" + it.first + "' ";
+			if (data.GetType(it.first) == Serialize::Data::DT_INT)
+				query_text += "int(11)";
+			else
+				query_text += "text";
+
+			queries.push_back(query_text);
+		}
+	}
+
+	return queries;
+}
+
+// Generate SQL for an insert statement
+SQL::Query PG::Service::BuildInsert(const Anope::string &table, unsigned int id, SQL::Data &data)
+{
+	// First off we are building the interpolation string
+	std::stringstream query_text;
+
+	// Only insert into columns in the data set
+	const std::set<Anope::string> &known_cols = active_schema[table];
+	for (auto &column : known_cols)
+		if (column != "id" && column != "timestamp" && data.data.count(column) == 0)
+			data[column] << "";
+
+	query_text << "INSERT INTO '" << table << "' ('id'";
+
+	// Add in column names
+	for (auto &column :data.data)
+		query_text << ",'" << column.first << '\'';
+	query_text << ") VALUES (" << stringify(id);
+
+	// Add in values
+	for (auto &value :data.data)
+		query_text << ",@" + value.first + '@';
+	query_text << ") ON DUPLICATE KEY UPDATE ";
+
+	// If row already exists, update instead
+	for (auto &value :data.data)
+		query_text << '\'' << value.first << "'=VALUES('" << value.first << ".),";
+	query_text.seekp(-1, query_text.end); // back up a smidge to overwrite that trailing comma
+
+	// Postgres does not return row insert IDs on success so we must append this here.
+	// Requires PostgresSQL 8.2 or higher
+	query_text << " RETURNING id";
+
+	// Interpolation string is now complete.
+	// Now populate the column:value map
+	SQL::Query query(query_text.str());
+	for (auto &it :data.data)
+	{
+		Anope::string buf = it.second->str();
+
+		bool escape = true;
+
+		// Handle empty values, pass NULL to the server
+		if (buf.empty())
+		{
+			buf = "NULL";
+			escape = false; // NULL and 'NULL' are not the same thing!
+		}
+
+		query.SetValue(it.first, buf, escape);
+	}
+
+	return query;
+}
+
+// Search for a table in the database starting with param
+SQL::Query PG::Service::GetTables(const Anope::string &prefix)
+{
+	return SQL::Query("SHOW TABLES LIKE '" + prefix + "%';");
+}
+
+// Connect to the database
+void PG::Service::Connect()
+{
+	std::stringstream connStr;
+
+	/*
+	 * Connection string is in standard URI format and should look like:
+	 * postgresql://user:pass@host:port/database?option1&option2
+	 *
+	 * Reference:
+	 * https://www.postgresql.org/docs/11/libpq-connect.html#LIBPQ-CONNSTRING
+	 */
+	connStr
+		<< "postgresql://"
+		<< user						<< ':'
+		<< password					<< '@'
+		<< server					<< ':'
+		<< stringify(port)			<< '/'
+		<< database					<< '?'
+		<< "application_name=Anope"	<< '&'
+		<< "sslmode=prefer"			<< '&'
+		<< "connect_timeout=1";
+
+	// If this succeeds we are fully connected, on the proper database in a single command.
+	sqlConnection = PQconnectdb(connStr.str().c_str());
+
+	if (PQstatus(sqlConnection) != CONNECTION_OK)
+		throw SQL::Exception("Unable to connect to PostgreSQL service " + name + ": " + PQerrorMessage(sqlConnection));
+
+	Log(LOG_NORMAL) << "Successfully connected to PostgreSQL service " << name << " at " << server << ":" << port << " (DB: " << database << ", SSL: " << stringify(PQsslInUse(sqlConnection)) << ")";
+}
+
+// Verify the connection is still live. Reconnect if not.
+bool PG::Service::CheckConnection()
+{
+	if (sqlConnection == nullptr || PQstatus(sqlConnection) != CONNECTION_OK)
+	{
+		try
+		{
+			Connect();
+		}
+		catch (const SQL::Exception &)
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+// Safe string escaping specifically for use with postgres
+Anope::string PG::Service::Escape(const Anope::string &query)
+{
+	// Postgres demands double buffer length plus 1 for escape to never overrun
+	std::vector<char> buffer(query.length() * 2 + 1);
+	int err = 0;
+
+	PQescapeStringConn(sqlConnection, &buffer[0], query.c_str(), query.length(), &err);
+
+	if (err != 0)
+		Log(LOG_DEBUG, "PgSQL") << "PgSQL: Escape failure '" << PQerrorMessage(sqlConnection) << "' on string:" << query;
+
+	return &buffer[0];
+}
+
+// Generate a safe interpolated query
+Anope::string PG::Service::BuildQuery(const SQL::Query &query)
+{
+	Anope::string real_query = query.query;
+
+	for (auto &param :query.parameters)
+	{
+		// If the field is numeric we don't need to escape it
+		Anope::string searchFor = '@' + param.first + '@';
+
+		Anope::string replaceWith
+			= param.second.escape
+			? '\'' + Escape(param.second.data) + '\''
+			:  param.second.data;
+
+		real_query = real_query.replace_all_cs(searchFor, replaceWith);
+	}
+
+	return real_query;
+}
+
+// Generate the SQL for a time_t to UNIX time conversion
+Anope::string PG::Service::FromUnixtime(time_t time)
+{
+	return "FROM_UNIXTIME(" + stringify(time) + ')';
+}
+
+/*
+ * Main thread loop for query execution
+ * Will suspend itself when the queue is empty.
  */
-class PgSQLResult : public SQL::Result
+void PG::Dispatcher::Run()
 {
-    PGresult *res;
+	ModuleHandler *modObj = ModuleHandler::moduleObject;
 
- public:
-    PgSQLResult(unsigned int i, const SQL::Query &q, const Anope::string &fq, PGresult *r) : SQL::Result(i, q, fq), res(r)
-    {
-        if (res == NULL)
-            return;
+	if (modObj == nullptr)
+	{
+		Log(LOG_DEBUG, "PgSQL") << "PgSQL: Dispatcher::Run(): Module object is null, unable to send queries!";
+		return;
+	}
 
-        bool isInsert = query.query.find("INSERT", 0) == 0;
+	Lock();
 
-        int num_fields = PQnfields(res);
-        int num_rows = PQntuples(res);
+	while (!GetExitState())
+	{
+		// Empty the queue of queries that need to go out
+		if (!modObj->QueryRequests.empty())
+		{
+			PG::QueryRequest &request = modObj->QueryRequests.front();
+			Unlock();
 
-        if (num_fields == 0 || num_rows == 0)
-            return;
+			SQL::Result sresult = request.sqlHandler->RunQuery(request.query);
 
-        // each row
-        for (int row = 0; row < num_rows; row++)
-        {
-            std::map<Anope::string, Anope::string> items;
+			Lock();
+			if (!modObj->QueryRequests.empty() && modObj->QueryRequests.front().query == request.query)
+			{
+				if (request.sqlInterface != nullptr)
+				{
+					modObj->FinishedRequests.push_back(PG::QueryResult(request.sqlInterface, sresult));
+				}
+				modObj->QueryRequests.pop_front();
+			}
+		}
 
-            // each column
-            for (int col = 0; col < num_fields; col++)
-            {
-                Anope::string column = PQfname(res, col);
-                Anope::string data = PQgetvalue(res, row, col);
+		// Handle all of the responses we just generated
+		else
+		{
+			if (!modObj->FinishedRequests.empty())
+				modObj->OnNotify();
 
-                items[column] = data;
+			// PG::ModuleHandler::OnNotify() will wake us up as needed
+			Wait();
+		}
+	}
 
-                if (isInsert && column== "id")
-                    id = convertTo<unsigned int>(data.str());
-            }
-
-            entries.push_back(items);
-        }
-    }
-
-    PgSQLResult(const SQL::Query &q, const Anope::string &fq, const Anope::string &err) : SQL::Result(0, q, fq, err), res(NULL)
-    {
-    }
-
-    ~PgSQLResult()
-    {
-        if (res)
-            PQclear(res);
-        res = NULL;
-    }
-};
-
-/** A PgSQL connection, there can be multiple
- */
-class PgSQLService : public SQL::Provider
-{
-private:
-    std::map<Anope::string, std::set<Anope::string> > active_schema;
-
-    Anope::string database;
-    Anope::string server;
-    Anope::string user;
-    Anope::string password;
-    int port;
-
-    PGconn *sql;
-
-    /** Escape a query.
-     * Note the mutex must be held!
-     */
-    Anope::string Escape(const Anope::string &query);
-
- public:
-    /* Locked by the SQL thread when a query is pending on this database,
-     * prevents us from deleting a connection while a query is executing
-     * in the thread
-     */
-    Mutex Lock;
-
-    PgSQLService(Module *o, const Anope::string &n, const Anope::string &d, const Anope::string &s, const Anope::string &u, const Anope::string &p, int po);
-
-    ~PgSQLService();
-
-    void Run(SQL::Interface *i, const SQL::Query &query) anope_override;
-
-    SQL::Result RunQuery(const SQL::Query &query) anope_override;
-
-    std::vector<SQL::Query> CreateTable(const Anope::string &table, const SQL::Data &data) anope_override;
-
-    SQL::Query BuildInsert(const Anope::string &table, unsigned int id, SQL::Data &data) anope_override;
-
-    SQL::Query GetTables(const Anope::string &prefix) anope_override;
-
-    void Connect();
-
-    bool CheckConnection();
-
-    Anope::string BuildQuery(const SQL::Query &q);
-
-    Anope::string FromUnixtime(time_t);
-};
-
-/** The SQL thread used to execute queries
- */
-class DispatcherThread : public Thread, public Condition
-{
- public:
-    DispatcherThread() : Thread() { }
-
-    void Run() anope_override;
-};
-
-class ModulePgSQL;
-static ModulePgSQL *me;
-class ModulePgSQL : public Module, public Pipe
-{
- private:
-    /* SQL connections */
-    std::map<Anope::string, PgSQLService *> PgSQLServices;
-
-
- public:
-    /* Pending query requests */
-    std::deque<QueryRequest> QueryRequests;
-
-    /* Pending finished requests with results */
-    std::deque<QueryResult> FinishedRequests;
-
-    /* The thread used to execute queries */
-    DispatcherThread *DThread;
-
-    ModulePgSQL(const Anope::string &modname, const Anope::string &creator) : Module(modname, creator, EXTRA | VENDOR)
-    {
-        me = this;
-
-        DThread = new DispatcherThread();
-        DThread->Start();
-    }
-
-    ~ModulePgSQL()
-    {
-        for (std::map<Anope::string, PgSQLService *>::iterator it = PgSQLServices.begin(); it != PgSQLServices.end(); ++it)
-            delete it->second;
-        PgSQLServices.clear();
-
-        DThread->SetExitState();
-        DThread->Wakeup();
-        DThread->Join();
-        delete DThread;
-    }
-
-    void OnReload(Configuration::Conf *conf) anope_override
-    {
-        Configuration::Block *config = conf->GetModule(this);
-
-        for (std::map<Anope::string, PgSQLService *>::iterator it = PgSQLServices.begin(); it != PgSQLServices.end();)
-        {
-            const Anope::string &cname = it->first;
-            PgSQLService *s = it->second;
-            int i;
-
-            ++it;
-
-            for (i = 0; i < config->CountBlock("pgsql"); ++i)
-                if (config->GetBlock("pgsql", i)->Get<const Anope::string>("name", "pgsql/main") == cname)
-                    break;
-
-            if (i == config->CountBlock("pgsql"))
-            {
-                Log(LOG_NORMAL, "PgSQL") << "PgSQL: Removing server connection " << cname;
-
-                delete s;
-                PgSQLServices.erase(cname);
-            }
-        }
-
-        for (int i = 0; i < config->CountBlock("pgsql"); ++i)
-        {
-            Configuration::Block *block = config->GetBlock("pgsql", i);
-            const Anope::string &connname = block->Get<const Anope::string>("name", "pgsql/main");
-
-            if (PgSQLServices.find(connname) == PgSQLServices.end())
-            {
-                const Anope::string &database = block->Get<const Anope::string>("database", "anope");
-                const Anope::string &server = block->Get<const Anope::string>("server", "127.0.0.1");
-                const Anope::string &user = block->Get<const Anope::string>("username", "anope");
-                const Anope::string &password = block->Get<const Anope::string>("password");
-                int port = block->Get<int>("port", "5432");
-
-                try
-                {
-                    PgSQLService *ss = new PgSQLService(this, connname, database, server, user, password, port);
-                    PgSQLServices.insert(std::make_pair(connname, ss));
-
-                    Log(LOG_NORMAL, "PgSQL") << "PgSQL: Successfully connected to server " << connname << " (" << server << ")";
-                }
-                catch (const SQL::Exception &ex)
-                {
-                    Log(LOG_NORMAL, "PgSQL") << "PgSQL: " << ex.GetReason();
-                }
-            }
-        }
-    }
-
-    void OnModuleUnload(User *, Module *m) anope_override
-    {
-        DThread->Lock();
-
-        for (unsigned i = QueryRequests.size(); i > 0; --i)
-        {
-            QueryRequest &r = QueryRequests[i - 1];
-
-            if (r.sqlinterface && r.sqlinterface->owner == m)
-            {
-                if (i == 1)
-                {
-                    r.service->Lock.Lock();
-                    r.service->Lock.Unlock();
-                }
-
-                QueryRequests.erase(QueryRequests.begin() + i - 1);
-            }
-        }
-
-        DThread->Unlock();
-
-        OnNotify();
-    }
-
-    void OnNotify() anope_override
-    {
-        DThread->Lock();
-        std::deque<QueryResult> finishedRequests = FinishedRequests;
-        FinishedRequests.clear();
-        DThread->Unlock();
-
-        for (std::deque<QueryResult>::const_iterator it = finishedRequests.begin(), it_end = finishedRequests.end(); it != it_end; ++it)
-        {
-            const QueryResult &qr = *it;
-
-            if (!qr.sqlinterface)
-                throw SQL::Exception("NULL qr.sqlinterface in PgSQLPipe::OnNotify() ?");
-
-            if (qr.result.GetError().empty())
-                qr.sqlinterface->OnResult(qr.result);
-            else
-                qr.sqlinterface->OnError(qr.result);
-        }
-    }
-};
-
-PgSQLService::PgSQLService(Module *o, const Anope::string &n, const Anope::string &d, const Anope::string &s, const Anope::string &u, const Anope::string &p, int po)
-: Provider(o, n), database(d), server(s), user(u), password(p), port(po), sql(NULL)
-{
-    Connect();
+	Unlock();
 }
 
-PgSQLService::~PgSQLService()
-{
-    me->DThread->Lock();
-    Lock.Lock();
-    PQfinish(sql);
-    sql = NULL;
-
-    for (unsigned i = me->QueryRequests.size(); i > 0; --i)
-    {
-        QueryRequest &r = me->QueryRequests[i - 1];
-
-        if (r.service == this)
-        {
-            if (r.sqlinterface)
-                r.sqlinterface->OnError(SQL::Result(0, r.query, "SQL Interface is going away"));
-            me->QueryRequests.erase(me->QueryRequests.begin() + i - 1);
-        }
-    }
-    Lock.Unlock();
-    me->DThread->Unlock();
-}
-
-void PgSQLService::Run(SQL::Interface *i, const SQL::Query &query)
-{
-    me->DThread->Lock();
-    me->QueryRequests.push_back(QueryRequest(this, i, query));
-    me->DThread->Unlock();
-    me->DThread->Wakeup();
-}
-
-SQL::Result PgSQLService::RunQuery(const SQL::Query &query)
-{
-    Lock.Lock();
-
-    Anope::string real_query = BuildQuery(query);
-
-    if (CheckConnection())
-    {
-        PGresult *res = PQexec(sql, real_query.c_str());
-
-        switch (PQresultStatus(res))
-        {
-
-        case PGRES_TUPLES_OK: // We got results back with our query
-        case PGRES_COMMAND_OK: //  We got no results back with our query
-            Lock.Unlock();
-            return PgSQLResult(0, query, real_query, res);
-
-        default: // There was probably a problem.
-            PQclear(res);
-            break;
-        }
-    }
-
-    Anope::string error = PQerrorMessage(sql);
-    Lock.Unlock();
-    return PgSQLResult(query, real_query, error);
-}
-
-std::vector<SQL::Query> PgSQLService::CreateTable(const Anope::string &table, const SQL::Data &data)
-{
-    std::vector<SQL::Query> queries;
-    std::set<Anope::string> &known_cols = active_schema[table];
-
-    if (known_cols.empty())
-    {
-        Log(LOG_DEBUG) << "m_pgsql: Fetching columns for " << table;
-
-        SQL::Result columns = RunQuery("SHOW COLUMNS FROM `" + table + "`");
-        for (int i = 0; i < columns.Rows(); ++i)
-        {
-            const Anope::string &column = columns.Get(i, "Field");
-
-            Log(LOG_DEBUG) << "m_pgsql: Column #" << i << " for " << table << ": " << column;
-            known_cols.insert(column);
-        }
-    }
-
-    if (known_cols.empty())
-    {
-        Anope::string query_text = "CREATE TABLE `" + table + "` (`id` int(10) unsigned NOT NULL AUTO_INCREMENT,"
-            " `timestamp` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP";
-        for (SQL::Data::Map::const_iterator it = data.data.begin(), it_end = data.data.end(); it != it_end; ++it)
-        {
-            known_cols.insert(it->first);
-
-            query_text += ", `" + it->first + "` ";
-            if (data.GetType(it->first) == Serialize::Data::DT_INT)
-                query_text += "int(11)";
-            else
-                query_text += "text";
-        }
-        query_text += ", PRIMARY KEY (`id`), KEY `timestamp_idx` (`timestamp`))";
-        queries.push_back(query_text);
-    }
-    else
-        for (SQL::Data::Map::const_iterator it = data.data.begin(), it_end = data.data.end(); it != it_end; ++it)
-        {
-            if (known_cols.count(it->first) > 0)
-                continue;
-
-            known_cols.insert(it->first);
-
-            Anope::string query_text = "ALTER TABLE `" + table + "` ADD `" + it->first + "` ";
-            if (data.GetType(it->first) == Serialize::Data::DT_INT)
-                query_text += "int(11)";
-            else
-                query_text += "text";
-
-            queries.push_back(query_text);
-        }
-
-    return queries;
-}
-
-SQL::Query PgSQLService::BuildInsert(const Anope::string &table, unsigned int id, SQL::Data &data)
-{
-    /* Empty columns not present in the data set */
-    const std::set<Anope::string> &known_cols = active_schema[table];
-    for (std::set<Anope::string>::iterator it = known_cols.begin(), it_end = known_cols.end(); it != it_end; ++it)
-        if (*it != "id" && *it != "timestamp" && data.data.count(*it) == 0)
-            data[*it] << "";
-
-    Anope::string query_text = "INSERT INTO `" + table + "` (`id`";
-
-    for (SQL::Data::Map::const_iterator it = data.data.begin(), it_end = data.data.end(); it != it_end; ++it)
-        query_text += ",`" + it->first + "`";
-    query_text += ") VALUES (" + stringify(id);
-
-    for (SQL::Data::Map::const_iterator it = data.data.begin(), it_end = data.data.end(); it != it_end; ++it)
-        query_text += ",@" + it->first + "@";
-    query_text += ") ON DUPLICATE KEY UPDATE ";
-
-    for (SQL::Data::Map::const_iterator it = data.data.begin(), it_end = data.data.end(); it != it_end; ++it)
-        query_text += "`" + it->first + "`=VALUES(`" + it->first + "`),";
-    query_text.erase(query_text.end() - 1);
-
-    // Postgres does not return row insert IDs on success so we must append this here.
-    // Will only work on 8.2+
-    query_text += " RETURNING id";
-
-    SQL::Query query(query_text);
-    for (SQL::Data::Map::const_iterator it = data.data.begin(), it_end = data.data.end(); it != it_end; ++it)
-    {
-        Anope::string buf;
-        *it->second >> buf;
-
-        bool escape = true;
-        if (buf.empty())
-        {
-            buf = "NULL";
-            escape = false;
-        }
-
-        query.SetValue(it->first, buf, escape);
-    }
-
-    return query;
-}
-
-SQL::Query PgSQLService::GetTables(const Anope::string &prefix)
-{
-    return SQL::Query("SHOW TABLES LIKE '" + prefix + "%';");
-}
-
-void PgSQLService::Connect()
-{
-    /*
-     * Connection string is in standard URI format and should look like:
-     * postgresql://user:pass@host:port/database?option1&option2
-     *
-     * Reference:
-     * https://www.postgresql.org/docs/11/libpq-connect.html#LIBPQ-CONNSTRING
-     */
-    Anope::string connStr =
-        "postgresql://"
-        + user + ":"
-        + password + "@"
-        + server + ":"
-        + stringify(port) + "/"
-        + database + "?"
-        + "application_name=Anope" + "&"
-        + "sslmode=prefer" + "&"
-        + "connect_timeout=1";
-
-    sql = PQconnectdb(connStr.c_str());
-
-    if (PQstatus(sql) != CONNECTION_OK)
-        throw SQL::Exception("Unable to connect to PostgreSQL service " + name + ": " + PQerrorMessage(sql));
-
-    Log(LOG_DEBUG) << "Successfully connected to PostgreSQL service " << name << " at " << server << ":" << port << " (SSL: " << stringify(PQsslInUse(sql)) << ")";
-}
-
-bool PgSQLService::CheckConnection()
-{
-    if (sql == NULL || PQstatus(sql) != CONNECTION_OK)
-    {
-        try
-        {
-            Connect();
-        }
-        catch (const SQL::Exception &)
-        {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-Anope::string PgSQLService::Escape(const Anope::string &query)
-{
-    std::vector<char> buffer(query.length() * 2 + 1);
-    int err = 0;
-
-    PQescapeStringConn(sql, &buffer[0], query.c_str(), query.length(), &err);
-
-    if (err != 0)
-        Log(LOG_NORMAL, "PgSQL") << "PgSQL: Escape failure '" << PQerrorMessage(sql) << "' on string:" << query;
-
-    return &buffer[0];
-}
-
-Anope::string PgSQLService::BuildQuery(const SQL::Query &q)
-{
-    Anope::string real_query = q.query;
-
-    for (std::map<Anope::string, SQL::QueryData>::const_iterator it = q.parameters.begin(), it_end = q.parameters.end(); it != it_end; ++it)
-        real_query = real_query.replace_all_cs("@" + it->first + "@", (it->second.escape ? ("'" + Escape(it->second.data) + "'") : it->second.data));
-
-    return real_query;
-}
-
-Anope::string PgSQLService::FromUnixtime(time_t t)
-{
-    return "FROM_UNIXTIME(" + stringify(t) + ")";
-}
-
-void DispatcherThread::Run()
-{
-    Lock();
-
-    while (!GetExitState())
-    {
-        if (!me->QueryRequests.empty())
-        {
-            QueryRequest &r = me->QueryRequests.front();
-            Unlock();
-
-            SQL::Result sresult = r.service->RunQuery(r.query);
-
-            Lock();
-            if (!me->QueryRequests.empty() && me->QueryRequests.front().query == r.query)
-            {
-                if (r.sqlinterface)
-                    me->FinishedRequests.push_back(QueryResult(r.sqlinterface, sresult));
-                me->QueryRequests.pop_front();
-            }
-        }
-        else
-        {
-            if (!me->FinishedRequests.empty())
-                me->Notify();
-            Wait();
-        }
-    }
-
-    Unlock();
-}
-
-MODULE_INIT(ModulePgSQL)
+// Instantiate the module and inform the module manager we're here
+MODULE_INIT(PG::ModuleHandler)
