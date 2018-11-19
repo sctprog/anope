@@ -51,9 +51,9 @@ struct QueryRequest
 
 	/**
 	 * @brief Constructor
-	 * @param service SQL service h andler
+	 * @param handler SQL service h andler
 	 * @param iface Interface manager
-	 * @param query Query to execute
+	 * @param quer Query to execute
 	 */
 	QueryRequest(Service *handler, SQL::Interface *iface, const SQL::Query &quer);
 };
@@ -98,10 +98,10 @@ private:
 public:
 	/**
 	 * @brief Constructor
-	 * @param insId
-	 * @param query
-	 * @param finalQuery
-	 * @param resObj
+	 * @param insId Unique row insert id, if the query was an insert request
+	 * @param query The query as was given to our module
+	 * @param finalQuery The final processed query sent to Postgres
+	 * @param resObj Library given result object
 	 */
 	Result(unsigned int insId, const SQL::Query &query, const Anope::string &finalQuery, PGresult *resObj);
 
@@ -376,13 +376,6 @@ public:
 	*/
 	void OnNotify() override;
 }; // PG::ModuleHandler class
-
-/**
- * @brief Other objects in the postgres module need to be able to find the thread manager
- * I tried to put this in the ModuleHandler class but was having linking errors.
- * Either it can't be done or, more likely, I just don't know how.
- */
-static PG::ModuleHandler *ModuleObject;
 
 } // PG namespace
 

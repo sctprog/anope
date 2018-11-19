@@ -22,6 +22,13 @@
 #include "modules/postgres.h"
 #include "modules/sql.h"
 
+/**
+ * @brief Other objects in the postgres module need to be able to find the thread manager
+ * I tried to put this in the ModuleHandler class but was having linking errors.
+ * Either it can't be done or, more likely, I just don't know how.
+ */
+namespace PG { static ModuleHandler *ModuleObject; }
+
 // Constructor
 PG::QueryRequest::QueryRequest(Service *handler, SQL::Interface *iface, const SQL::Query &quer)
 {
@@ -48,6 +55,7 @@ PG::Result::Result(
 {
 	libpqResultObj = resObj;
 
+	// Prevent segfaults
 	if (libpqResultObj == nullptr)
 		return;
 
@@ -78,6 +86,10 @@ PG::Result::Result(
 
 		entries.push_back(items);
 	}
+
+	// Done processing, clean up
+	PQclear(libpqResultObj);
+	libpqResultObj = nullptr;
 }
 
 PG::Result::Result(
@@ -175,7 +187,7 @@ void PG::ModuleHandler::OnReload(Configuration::Conf *conf)
 			try
 			{
 				Log(LOG_NORMAL, "PgSQL") << "m_pgsql: Instantiating " << connname << " (" << server << ")";
-				PG::Service *service = new PG::Service(this, connname, database, server, user, password, port);
+				auto *service = new PG::Service(this, connname, database, server, user, password, port);
 
 				// Inform the service manager that we are up
 				activeConnections.insert(std::make_pair(connname, service));
@@ -195,8 +207,13 @@ void PG::ModuleHandler::OnModuleUnload(User *, Module *module)
 {
 	dispatcher->Lock();
 
-	// Wipe all remaining query requests from the pool
-	// We need to work backwards because we're modifying the container that's being iterated.
+	/*
+	 * Wipe all remaining query requests from the pool
+	 * We need to work backwards because we're modifying the container that's being iterated
+	 *
+	 * There's an implicit type conversion being done here and no way around it.
+	 * It's highly unlikely we will ever have the several billion queued queries required to overflow this
+	 */
 	for (unsigned i = QueryRequests.size(); i > 0; --i)
 	{
 		PG::QueryRequest &request = QueryRequests[i - 1];
@@ -311,7 +328,7 @@ void PG::Service::Run(SQL::Interface *iface, const SQL::Query &query)
 	PG::ModuleHandler *modObj = PG::ModuleObject;
 
 	modObj->dispatcher->Lock();
-	modObj->QueryRequests.push_back(PG::QueryRequest(this, iface, query));
+	modObj->QueryRequests.emplace_back(PG::QueryRequest(this, iface, query));
 	modObj->dispatcher->Unlock();
 	modObj->dispatcher->Wakeup();
 }
@@ -388,7 +405,7 @@ std::vector<SQL::Query> PG::Service::CreateTable(const Anope::string &table, con
 		}
 
 		query_text += ", PRIMARY KEY ('id'), KEY 'timestamp_idx' ('timestamp'))";
-		queries.push_back(query_text);
+		queries.emplace_back(query_text);
 	}
 
 	// Ensure the existing table in SQL isn't missing any columns
@@ -408,7 +425,7 @@ std::vector<SQL::Query> PG::Service::CreateTable(const Anope::string &table, con
 			else
 				query_text += "text";
 
-			queries.push_back(query_text);
+			queries.emplace_back(query_text);
 		}
 	}
 
@@ -442,7 +459,7 @@ SQL::Query PG::Service::BuildInsert(const Anope::string &table, unsigned int id,
 	// If row already exists, update instead
 	for (auto &value :data.data)
 		query_text << '\'' << value.first << "'=VALUES('" << value.first << ".),";
-	query_text.seekp(-1, query_text.end); // back up a smidge to overwrite that trailing comma
+	query_text.seekp(-1, std::stringstream::end); // back up a smidge to overwrite that trailing comma
 
 	// Postgres does not return row insert IDs on success so we must append this here.
 	// Requires PostgresSQL 8.2 or higher
@@ -599,7 +616,7 @@ void PG::Dispatcher::Run()
 			{
 				if (request.sqlInterface != nullptr)
 				{
-					modObj->FinishedRequests.push_back(PG::QueryResult(request.sqlInterface, sresult));
+					modObj->FinishedRequests.emplace_back(PG::QueryResult(request.sqlInterface, sresult));
 				}
 				modObj->QueryRequests.pop_front();
 			}
