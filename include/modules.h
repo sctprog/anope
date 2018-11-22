@@ -78,8 +78,8 @@
 #define FOREACH_MOD(ename, args) \
 if (true) \
 { \
-	std::vector<Module *> &_modules = ModuleManager::EventHandlers[I_ ## ename]; \
-	for (std::vector<Module *>::iterator _i = _modules.begin(); _i != _modules.end();) \
+	std::vector<Module *> &_modules = ModuleManager::EventHandlers[I_##ename]; \
+	for (auto _i = _modules.begin(); _i != _modules.end();) \
 	{ \
 		try \
 		{ \
@@ -191,7 +191,9 @@ typedef unsigned short ModType;
 
 struct ModuleVersionC
 {
-	int version_major, version_minor, version_patch;
+	int version_major;
+	int version_minor;
+	int version_patch;
 };
 
 /** Returned by Module::GetVersion, used to see what version of Anope

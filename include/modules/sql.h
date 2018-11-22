@@ -9,6 +9,12 @@
 #ifndef MODULES_SQL_H_
 #define MODULES_SQL_H_
 
+
+#include <vector>
+
+#include "serialize.h"
+#include "service.h"
+
 namespace SQL
 {
 

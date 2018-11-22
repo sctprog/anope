@@ -19,6 +19,7 @@
 
 
 #include <libpq-fe.h>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 
@@ -40,7 +41,7 @@ struct QueryRequest
 	Service *sqlHandler;
 
 	/**
-	 * @brief The interface to use once we have the result so we can send the data back to the caller.
+	 * @brief Interface object that acts as the glue between us and the caller.
 	 */
 	SQL::Interface *sqlInterface;
 
@@ -101,7 +102,7 @@ public:
 	 * @param insId Unique row insert id, if the query was an insert request
 	 * @param query The query as was given to our module
 	 * @param finalQuery The final processed query sent to Postgres
-	 * @param resObj Library given result object
+	 * @param resObj Result object provided by libpq
 	 */
 	Result(unsigned int insId, const SQL::Query &query, const Anope::string &finalQuery, PGresult *resObj);
 
@@ -170,15 +171,6 @@ private:
 	 */
 	Anope::string database;
 
-	/**
-	 * @brief Tracker of current prepared ids for generating unique ones on new statements
-	 */
-	int currentPrepared;
-
-	/**
-	 * @brief Hash of all active prepared statements
-	 */
-	std::unordered_map<std::string, int> preparedStatements;
 
 	/**
 	 * @brief Pointer to the object used by libpq for this connection
@@ -336,9 +328,21 @@ public:
 	std::deque<PG::QueryRequest> QueryRequests;
 
 	/**
+	 * Mutex for query request queue
+	 * If both this and QueryRequestLock are to be locked, this must be locked first
+	 */
+	std::mutex QueryRequestsLock;
+
+	/**
 	 * @brief Pending finished requests with results
 	 */
 	std::deque<PG::QueryResult> FinishedRequests;
+
+	/**
+	 * Mutex for finished requests
+	 * If both this and QueryRequestLock are to be locked, this must be locked second
+	 */
+	std::mutex FinishedRequestsLock;
 
 	/**
 	 * @brief The thread used to execute queries

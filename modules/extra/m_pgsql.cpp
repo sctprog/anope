@@ -18,6 +18,7 @@
 
 #include <string>
 #include <sstream>
+#include <thread>
 
 #include "modules/postgres.h"
 #include "modules/sql.h"
@@ -58,6 +59,7 @@ PG::Result::Result(
 	// Prevent segfaults
 	if (libpqResultObj == nullptr)
 		return;
+	Log(LOG_DEBUG) << "m_pgsql: Processing result from query: " << query.query;
 
 	// Look for the position of the word 'INSERT'
 	bool isInsert = query.query.find("INSERT", 0) == 0;
@@ -87,6 +89,10 @@ PG::Result::Result(
 		entries.push_back(items);
 	}
 
+	Log(LOG_DEBUG)
+		<< "m_pgsql: Completed processing of query result. Rows: " << num_rows << ". Cols: " << num_fields
+        << "\n --- Query was: " << finalQuery;
+
 	// Done processing, clean up
 	PQclear(libpqResultObj);
 	libpqResultObj = nullptr;
@@ -106,7 +112,7 @@ PG::Result::~Result()
 {
 	if (libpqResultObj != nullptr)
 	{
-		// Prevent memory leaks.
+		// Instruct libpq to free the result resources
 		PQclear(libpqResultObj);
 
 		libpqResultObj = nullptr;
@@ -139,6 +145,7 @@ PG::ModuleHandler::~ModuleHandler()
 	delete dispatcher;
 
 	PG::ModuleObject = nullptr;
+	Log(LOG_DEBUG) << "m_pgsql: PG::ModuleHandler::~ModuleHandler() exiting";
 }
 
 // Handle reload of services configuration or initial startup
@@ -172,9 +179,9 @@ void PG::ModuleHandler::OnReload(Configuration::Conf *conf)
 	for (int i = 0; i < config->CountBlock("pgsql"); ++i)
 	{
 		Configuration::Block *block = config->GetBlock("pgsql", i);
-		const Anope::string &connname = block->Get<const Anope::string>("name", "pgsql/main");
+		const Anope::string &serviceName = block->Get<const Anope::string>("name", "pgsql/main");
 
-		if (activeConnections.find(connname) == activeConnections.end())
+		if (activeConnections.find(serviceName) == activeConnections.end())
 		{
 			// Populate the SQLd connection data
 			const Anope::string &database = block->Get<const Anope::string>("database", "anope");
@@ -186,11 +193,11 @@ void PG::ModuleHandler::OnReload(Configuration::Conf *conf)
 			// Attempt the connection
 			try
 			{
-				Log(LOG_NORMAL, "PgSQL") << "m_pgsql: Instantiating " << connname << " (" << server << ")";
-				auto *service = new PG::Service(this, connname, database, server, user, password, port);
+				Log(LOG_NORMAL, "PgSQL") << "m_pgsql: Instantiating " << serviceName << " (" << server << ")";
+				auto *service = new PG::Service(this, serviceName, database, server, user, password, port);
 
 				// Inform the service manager that we are up
-				activeConnections.insert(std::make_pair(connname, service));
+				activeConnections.insert(std::make_pair(serviceName, service));
 			}
 
 			catch (const SQL::Exception &ex)
@@ -205,16 +212,13 @@ void PG::ModuleHandler::OnReload(Configuration::Conf *conf)
 // Handle module unloading and services shut down
 void PG::ModuleHandler::OnModuleUnload(User *, Module *module)
 {
-	dispatcher->Lock();
+	QueryRequestsLock.lock();
 
 	/*
 	 * Wipe all remaining query requests from the pool
 	 * We need to work backwards because we're modifying the container that's being iterated
-	 *
-	 * There's an implicit type conversion being done here and no way around it.
-	 * It's highly unlikely we will ever have the several billion queued queries required to overflow this
 	 */
-	for (unsigned i = QueryRequests.size(); i > 0; --i)
+	for (auto i = (unsigned)QueryRequests.size(); i > 0; --i)
 	{
 		PG::QueryRequest &request = QueryRequests[i - 1];
 
@@ -232,14 +236,11 @@ void PG::ModuleHandler::OnModuleUnload(User *, Module *module)
 		}
 	}
 
-	dispatcher->Unlock();
+	QueryRequestsLock.unlock();
 
 	/*
 	 * Handle any remaining finished SQL requests
-	 *
-	 * This serves two purposes:
-	 *  1) We can process any remaining information that needs to be
-	 *  2) More importantly, any allocated memory from libpq will be managed
+	 * This allows us to process any remaining information that needs to be
 	 */
 	OnNotify();
 }
@@ -248,17 +249,21 @@ void PG::ModuleHandler::OnModuleUnload(User *, Module *module)
 void PG::ModuleHandler::OnNotify()
 {
 	// Do a copy of the finished requests right now so we don't hold up the dispatcher
-	dispatcher->Lock();
+	FinishedRequestsLock.lock();
 	std::deque<PG::QueryResult> finishedRequests = FinishedRequests;
 	FinishedRequests.clear();
-	dispatcher->Unlock();
+	FinishedRequestsLock.unlock();
 
 	// Iterate over the finished requests
 	for (auto &result :finishedRequests)
 	{
 		if (result.sqlInterface == nullptr)
-			throw SQL::Exception("sqlInterface is null in ModulePgSQL::OnNotify()");
+		{
+			Log(LOG_DEBUG) << "m_pgsql: PG::ModuleHandler::OnNotify(): sqlInterface is null";
+			throw SQL::Exception("PG::ModuleHandler::OnNotify(): sqlInterface is null");
+		}
 
+		// Let the calling module know what happened, good or bad.
 		if (result.result.GetError().empty())
 			result.sqlInterface->OnResult(result.result);
 
@@ -298,7 +303,7 @@ PG::Service::~Service()
 	// Find the module handler
 	ModuleHandler *modObj = PG::ModuleObject;
 
-	modObj->dispatcher->Lock();
+	modObj->QueryRequestsLock.lock();
 	Lock.Lock();
 
 	// Close the Postgres connection
@@ -317,8 +322,10 @@ PG::Service::~Service()
 			modObj->QueryRequests.erase(modObj->QueryRequests.begin() + i - 1);
 		}
 	}
+
 	Lock.Unlock();
-	modObj->dispatcher->Unlock();
+	modObj->QueryRequestsLock.unlock();
+	Log(LOG_DEBUG) << "m_pgsql: Service destructor exiting.";
 }
 
 // Enqueue a query for execution
@@ -327,25 +334,31 @@ void PG::Service::Run(SQL::Interface *iface, const SQL::Query &query)
 	// Find the module handler
 	PG::ModuleHandler *modObj = PG::ModuleObject;
 
-	modObj->dispatcher->Lock();
+	modObj->QueryRequestsLock.lock();
 	modObj->QueryRequests.emplace_back(PG::QueryRequest(this, iface, query));
-	modObj->dispatcher->Unlock();
+	modObj->QueryRequestsLock.unlock();
+
 	modObj->dispatcher->Wakeup();
+
+	Log(LOG_DEBUG) << "m_pgsql: Query enqueued: " << query.query;
 }
 
-// Send a query to the database, return it's results
+// Immediately send a query to the database, return it's results
 SQL::Result PG::Service::RunQuery(const SQL::Query &query)
 {
 	Lock.Lock();
 
+	// Do interpolation
 	Anope::string real_query = BuildQuery(query);
 
 	if (CheckConnection())
 	{
+		Log(LOG_DEBUG) << "m_pgsql: Sending query to database: " << real_query;
+
 		PGresult *res = PQexec(sqlConnection, real_query.c_str());
 
 		if (PQresultStatus(res) == PGRES_TUPLES_OK // We got results back with our query
-			|| PQresultStatus(res) == PGRES_COMMAND_OK) // We got no results back with our query
+		 || PQresultStatus(res) == PGRES_COMMAND_OK) // We got no results back with our query
 		{
 			Lock.Unlock();
 			return PG::Result(0, query, real_query, res);
@@ -568,8 +581,8 @@ Anope::string PG::Service::BuildQuery(const SQL::Query &query)
 		// If the field is numeric we don't need to escape it
 		Anope::string searchFor = '@' + param.first + '@';
 
-		Anope::string replaceWith
-			= param.second.escape
+		Anope::string replaceWith =
+			param.second.escape // Escape the string?
 			? '\'' + Escape(param.second.data) + '\''
 			:  param.second.data;
 
@@ -599,41 +612,51 @@ void PG::Dispatcher::Run()
 		return;
 	}
 
-	Lock();
-
 	while (!GetExitState())
 	{
 		// Empty the queue of queries that need to go out
+		modObj->QueryRequestsLock.lock();
 		if (!modObj->QueryRequests.empty())
 		{
 			PG::QueryRequest &request = modObj->QueryRequests.front();
-			Unlock();
+			modObj->QueryRequestsLock.unlock();
 
-			SQL::Result sresult = request.sqlHandler->RunQuery(request.query);
+			SQL::Result result = request.sqlHandler->RunQuery(request.query);
 
-			Lock();
+			modObj->QueryRequestsLock.lock();
+
 			if (!modObj->QueryRequests.empty() && modObj->QueryRequests.front().query == request.query)
 			{
 				if (request.sqlInterface != nullptr)
 				{
-					modObj->FinishedRequests.emplace_back(PG::QueryResult(request.sqlInterface, sresult));
+					modObj->FinishedRequestsLock.lock();
+					modObj->FinishedRequests.emplace_back(PG::QueryResult(request.sqlInterface, result));
+					modObj->FinishedRequestsLock.unlock();
 				}
 				modObj->QueryRequests.pop_front();
 			}
+
+			modObj->QueryRequestsLock.unlock();
 		}
 
 		// Handle all of the responses we just generated
 		else
 		{
-			if (!modObj->FinishedRequests.empty())
+			modObj->FinishedRequestsLock.lock();
+			bool waitingResults = !modObj->FinishedRequests.empty();
+			modObj->FinishedRequestsLock.unlock();
+			modObj->QueryRequestsLock.unlock();
+
+			// Let the module handler know we have some work for it
+			if (waitingResults)
 				modObj->OnNotify();
 
-			// PG::ModuleHandler::OnNotify() will wake us up as needed
+			// PG::Service::Run() will wake us up as needed
 			Wait();
 		}
 	}
 
-	Unlock();
+	Log(LOG_DEBUG) << "m_pgsql: Got thread exit signal in dispatcher.";
 }
 
 // Instantiate the module and inform the module manager we're here
